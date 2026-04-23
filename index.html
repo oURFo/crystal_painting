@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>點畫 - Dot Draw</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <!-- 側邊欄菜單 -->
+        <aside id="sidebar" class="sidebar">
+            <button id="close-sidebar" class="icon-btn">✕</button>
+            <nav>
+                <ul>
+                    <li><a href="#" id="nav-home">首頁大廳</a></li>
+                    <li><a href="#" id="nav-collection">我的收藏</a></li>
+                    <li><a href="#" id="nav-settings">設定</a></li>
+                    <li><a href="#" id="nav-about">關於點畫</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <!-- 遊戲大廳 (Lobby) -->
+        <section id="lobby" class="screen active">
+            <div class="lobby-content">
+                <button id="open-sidebar" class="menu-trigger">
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                </button>
+                <h1 class="game-title">點畫</h1>
+                <p class="game-subtitle">還原水晶之光</p>
+                <div class="lobby-actions">
+                    <button id="start-game" class="btn-primary">開始遊戲</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- 關卡選擇 (Level Select) -->
+        <section id="level-select" class="screen">
+            <header class="screen-header">
+                <button class="back-btn" id="back-to-lobby">←</button>
+                <h2>選擇關卡</h2>
+            </header>
+            <div class="level-slider-container">
+                <div id="level-slider" class="level-slider">
+                    <!-- 關卡會由 JS 動態生成 -->
+                </div>
+            </div>
+            <div class="slider-dots" id="slider-dots"></div>
+        </section>
+
+        <!-- 遊戲主體 (Game Main) -->
+        <section id="game-main" class="screen">
+            <canvas id="game-canvas"></canvas>
+            <div id="ui-overlay">
+                <button id="exit-game" class="icon-btn">✕</button>
+                <div id="game-timer" class="timer">00:00</div>
+            </div>
+            
+            <!-- 過關彈窗 -->
+            <div id="win-modal" class="modal">
+                <div class="modal-content">
+                    <h3 id="win-title">光芒再現</h3>
+                    <p id="win-time">用時：00:45</p>
+                    <div class="modal-actions">
+                        <button id="next-level" class="btn-primary">下一關</button>
+                        <button id="return-to-select" class="btn-secondary">返回列表</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- 庫文件 -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module" src="main.js"></script>
+</body>
+</html>
