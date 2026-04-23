@@ -5,12 +5,11 @@
 
 import { GameEngine } from './engine.js';
 
-// --- 模擬關卡數據 ---
+// --- 關卡數據 ---
 const LEVELS = [
-    { id: 1, title: '心之光', image: 'assets/level1.png', points: 100 },
-    { id: 2, title: '天鵝之舞', image: 'assets/level2.png', points: 150 },
-    { id: 3, title: '鑽石永恆', image: 'assets/level3.png', points: 200 },
-    { id: 4, title: '即將揭曉', image: null, locked: true },
+    { id: 1, title: '船長皮卡丘', image: 'assets/level1.png', points: 150 },
+    { id: 2, title: '第二關', image: 'assets/level2.png', points: 150 },
+    { id: 3, title: '第三關', image: 'assets/level3.png', points: 150 },
 ];
 
 class App {
@@ -95,11 +94,41 @@ class App {
         
         if (!this.engine) {
             const canvas = document.getElementById('game-canvas');
-            this.engine = new GameEngine(canvas);
+            this.engine = new GameEngine(canvas, () => this.showWin(level));
         }
         
         await this.engine.loadLevel(level);
         this.startTimer();
+    }
+
+    showWin(level) {
+        // 停止計時
+        if (this.gameTimer) clearInterval(this.gameTimer);
+
+        // 建立勝利覆蓋層
+        const overlay = document.createElement('div');
+        overlay.id = 'win-overlay';
+        overlay.innerHTML = `
+            <div class="win-box">
+                <div class="win-sparkle">✨</div>
+                <h2 class="win-title">完成！</h2>
+                <p class="win-sub">${level.title}</p>
+                <div class="win-time">用時 ${document.getElementById('game-timer').textContent}</div>
+                <div class="win-buttons">
+                    <button id="win-back" class="win-btn">返回關卡</button>
+                </div>
+            </div>
+        `;
+        document.getElementById('game-main').appendChild(overlay);
+
+        // 短暫顯示後加入動畫 class
+        requestAnimationFrame(() => overlay.classList.add('visible'));
+
+        document.getElementById('win-back').addEventListener('click', () => {
+            overlay.remove();
+            if (this.engine) this.engine.isRunning = false;
+            this.switchScreen('levelSelect');
+        });
     }
 
     startTimer() {
