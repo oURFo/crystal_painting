@@ -46,100 +46,139 @@ export class GameRenderer {
         }
     }
 
-    // ── 建立圖片光點雲 ───────────────────────────────────────
+    // ── 建立雙層光點雲（邊界與內部畫布） ───────────────────────────
     createPointMesh(physicsPoints) {
         if (this.pointsMesh) {
             this.scene.remove(this.pointsMesh);
-            this.pointsMesh.geometry.dispose();
-            this.pointsMesh.material.dispose();
+            this.pointsGeometry?.dispose();
+            this.pointsMaterial?.dispose();
+            this.pointsMesh = null;
+        }
+        if (this.clothMesh) {
+            this.scene.remove(this.clothMesh);
+            this.clothGeometry?.dispose();
+            this.clothMaterial?.dispose();
+            this.clothMesh = null;
         }
 
-        const count     = physicsPoints.length;
-        const positions = new Float32Array(count * 3);
-        const colors    = new Float32Array(count * 3);
+        // 分離內部點與邊界點
+        const boundaryPoints = physicsPoints.filter(p => p.isBoundary);
+        const clothPoints    = physicsPoints.filter(p => !p.isBoundary);
 
-        physicsPoints.forEach((p, i) => {
-            positions[i * 3]     = p.pos.x;
-            positions[i * 3 + 1] = p.pos.y;
-            positions[i * 3 + 2] = 0;
+        this.boundaryPointIndices = boundaryPoints.map(p => p.index);
+        this.clothPointIndices    = clothPoints.map(p => p.index);
 
-            // 在 HSL 空間提高飽和度與亮度，讓顏色鮮豔但保留原色相
+        // 1. 建立邊界光點 (巨大、閃爍、可操作)
+        const bCount = boundaryPoints.length;
+        const bPositions = new Float32Array(bCount * 3);
+        const bColors    = new Float32Array(bCount * 3);
+
+        boundaryPoints.forEach((p, i) => {
+            bPositions[i*3] = p.pos.x; bPositions[i*3+1] = p.pos.y; bPositions[i*3+2] = 0;
             const c = new THREE.Color(p.color);
             const hsl = { h: 0, s: 0, l: 0 };
             c.getHSL(hsl);
-            // 飽和度至少 60%，亮度固定 0.7（讓深色/黑色也能發光）
             c.setHSL(hsl.h, Math.max(0.6, hsl.s), 0.70);
-
-            colors[i * 3]     = c.r;
-            colors[i * 3 + 1] = c.g;
-            colors[i * 3 + 2] = c.b;
+            bColors[i*3] = c.r; bColors[i*3+1] = c.g; bColors[i*3+2] = c.b;
         });
 
-        this.geometry = new THREE.BufferGeometry();
-        this.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        this.geometry.setAttribute('color',    new THREE.BufferAttribute(colors,    3));
+        this.pointsGeometry = new THREE.BufferGeometry();
+        this.pointsGeometry.setAttribute('position', new THREE.BufferAttribute(bPositions, 3));
+        this.pointsGeometry.setAttribute('color',    new THREE.BufferAttribute(bColors, 3));
 
-        // ── 水晶光點 Shader（AdditiveBlending + 保留原色）──
-        this.material = new THREE.ShaderMaterial({
+        this.pointsMaterial = new THREE.ShaderMaterial({
             uniforms: { uTime: { value: 0 } },
             vertexShader: `
                 uniform float uTime;
-                varying   vec3  vColor;
-                varying   float vPhase;
-
+                varying vec3 vColor;
+                varying float vPhase;
                 void main() {
-                    vColor = color; // Three.js 自動注入，不需另宣告
-
-                    // 用座標雜湊產生點獨立相位，避免 gl_VertexID (GLSL3)
+                    vColor = color; 
                     float hash = fract(sin(position.x * 127.1 + position.y * 311.7) * 43758.5);
                     vPhase = fract(hash + uTime * 0.5);
-
-                    vec4 mvPos    = modelViewMatrix * vec4(position, 1.0);
+                    vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
                     float shimmer = 1.0 + 0.15 * sin(vPhase * 6.2832);
-                    // 基本大小 55，讓點明顯可見
-                    gl_PointSize  = 55.0 * shimmer * (1.0 / -mvPos.z);
-                    gl_Position   = projectionMatrix * mvPos;
+                    gl_PointSize = 120.0 * shimmer * (1.0 / -mvPos.z); // 巨大邊界點
+                    gl_Position = projectionMatrix * mvPos;
                 }
             `,
             fragmentShader: `
                 uniform float uTime;
-                varying vec3  vColor;
+                varying vec3 vColor;
                 varying float vPhase;
-
                 void main() {
-                    vec2  uv = gl_PointCoord * 2.0 - 1.0;
-                    float r  = dot(uv, uv);
+                    vec2 uv = gl_PointCoord * 2.0 - 1.0;
+                    float r = dot(uv, uv);
                     if (r > 1.0) discard;
-
-                    // 主體：清晰的圓形（邊緣 smoothstep）
                     float disc = 1.0 - smoothstep(0.5, 0.8, r);
-
-                    // 刻面：在外圍加入折射條紋，同色系，不搶色
-                    float angle  = atan(uv.y, uv.x);
-                    float facet  = 0.5 + 0.5 * abs(sin(angle * 4.0 + uTime + vPhase * 6.28));
+                    float angle = atan(uv.y, uv.x);
+                    float facet = 0.5 + 0.5 * abs(sin(angle * 4.0 + uTime + vPhase * 6.28));
                     float facetR = smoothstep(0.25, 0.5, r) * (1.0 - smoothstep(0.5, 0.8, r));
-
-                    // 核心：極小的白色亮點，只佔 15% 半徑
                     float core = 1.0 - smoothstep(0.0, 0.15, r);
-
-                    // 最終色：原色主體 + 同色系刻面 + 縮小白芯
-                    // 用 Additive 模式，所以不需要 alpha 遮罩也能發光
-                    vec3 col = vColor * disc
-                             + vColor * facet * facetR * 0.4
-                             + vec3(1.0) * core * 0.5;
-
-                    // alpha：圓形邊界即可，核心補一點
+                    vec3 col = vColor * disc + vColor * facet * facetR * 0.4 + vec3(1.0) * core * 0.5;
                     gl_FragColor = vec4(col, disc);
                 }
             `,
-            transparent:  true,
-            blending:     THREE.AdditiveBlending, // 加法混色：保留顏色且自然發光
-            depthWrite:   false,
-            vertexColors: true,
+            transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true
         });
 
-        this.pointsMesh = new THREE.Points(this.geometry, this.material);
+        this.pointsMesh = new THREE.Points(this.pointsGeometry, this.pointsMaterial);
+        this.pointsMesh.renderOrder = 2; // 最上層
         this.scene.add(this.pointsMesh);
+
+        // 2. 建立畫布內部光點 (細小、密集、保留原色)
+        const cCount = clothPoints.length;
+        const cPositions = new Float32Array(cCount * 3);
+        const cColors    = new Float32Array(cCount * 3);
+
+        clothPoints.forEach((p, i) => {
+            cPositions[i*3] = p.pos.x; cPositions[i*3+1] = p.pos.y; cPositions[i*3+2] = 0;
+            const c = new THREE.Color(p.color);
+            cColors[i*3] = c.r; cColors[i*3+1] = c.g; cColors[i*3+2] = c.b;
+        });
+
+        this.clothGeometry = new THREE.BufferGeometry();
+        this.clothGeometry.setAttribute('position', new THREE.BufferAttribute(cPositions, 3));
+        this.clothGeometry.setAttribute('color',    new THREE.BufferAttribute(cColors, 3));
+
+        this.clothMaterial = new THREE.ShaderMaterial({
+            uniforms: { uTime: { value: 0 } },
+            vertexShader: `
+                uniform float uTime;
+                varying vec3 vColor;
+                varying float vPhase;
+                void main() {
+                    vColor = color; 
+                    float hash = fract(sin(position.x * 127.1 + position.y * 311.7) * 43758.5);
+                    vPhase = fract(hash + uTime * 0.5);
+                    vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+                    // 細小點，微微閃動
+                    float shimmer = 1.0 + 0.1 * sin(vPhase * 6.2832);
+                    gl_PointSize = 12.0 * shimmer * (1.0 / -mvPos.z); // 細小內部點
+                    gl_Position = projectionMatrix * mvPos;
+                }
+            `,
+            fragmentShader: `
+                uniform float uTime;
+                varying vec3 vColor;
+                varying float vPhase;
+                void main() {
+                    vec2 uv = gl_PointCoord * 2.0 - 1.0;
+                    float r = dot(uv, uv);
+                    if (r > 1.0) discard;
+                    
+                    // 內部點為柔和圓點，帶微光
+                    float disc = 1.0 - smoothstep(0.4, 0.9, r);
+                    vec3 col = vColor * disc * 1.5; // 稍微增亮
+                    gl_FragColor = vec4(col, disc * 0.8);
+                }
+            `,
+            transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true
+        });
+
+        this.clothMesh = new THREE.Points(this.clothGeometry, this.clothMaterial);
+        this.clothMesh.renderOrder = 1;
+        this.scene.add(this.clothMesh);
     }
 
     // ── 掛鉤：純光點，無任何幾何實體 ────────────────────────
@@ -199,15 +238,27 @@ export class GameRenderer {
 
     // ── 每幀更新 ──────────────────────────────────────────────
     update(physicsPoints, time) {
-        if (!this.pointsMesh) return;
+        if (!this.clothMesh || !this.pointsMesh) return;
 
-        const pos = this.geometry.attributes.position.array;
-        physicsPoints.forEach((p, i) => {
-            pos[i * 3]     = p.pos.x;
-            pos[i * 3 + 1] = p.pos.y;
+        // 更新內部畫布光點座標
+        const cPos = this.clothGeometry.attributes.position.array;
+        this.clothPointIndices.forEach((physicsIndex, i) => {
+            const p = physicsPoints[physicsIndex];
+            cPos[i * 3]     = p.pos.x;
+            cPos[i * 3 + 1] = p.pos.y;
         });
-        this.geometry.attributes.position.needsUpdate = true;
-        this.material.uniforms.uTime.value = time;
+        this.clothGeometry.attributes.position.needsUpdate = true;
+        this.clothMaterial.uniforms.uTime.value = time;
+
+        // 更新邊界可互動光點座標
+        const bPos = this.pointsGeometry.attributes.position.array;
+        this.boundaryPointIndices.forEach((physicsIndex, i) => {
+            const p = physicsPoints[physicsIndex];
+            bPos[i * 3]     = p.pos.x;
+            bPos[i * 3 + 1] = p.pos.y;
+        });
+        this.pointsGeometry.attributes.position.needsUpdate = true;
+        this.pointsMaterial.uniforms.uTime.value = time;
 
         // 更新掛鉤脈衝
         for (const m of this.hookMats) {

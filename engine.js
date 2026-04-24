@@ -40,13 +40,28 @@ export class GameEngine {
         const w = this.screenToWorld(clientX, clientY);
         this.mouse = w;
 
-        let minD  = 0.6;
+        let minD  = 1.5; // 放寬滑鼠抓取半徑
         let found = null;
+
+        // 優先尋找邊界光點
         for (const p of this.world.points) {
+            if (!p.isBoundary) continue;
             const dx = p.pos.x - w.x;
             const dy = p.pos.y - w.y;
             const d  = Math.sqrt(dx * dx + dy * dy);
             if (d < minD) { minD = d; found = p; }
+        }
+
+        // 如果沒抓到邊界光點，再尋找內部網格點
+        if (!found) {
+            minD = 1.5; // 重置搜尋半徑
+            for (const p of this.world.points) {
+                if (p.isBoundary) continue;
+                const dx = p.pos.x - w.x;
+                const dy = p.pos.y - w.y;
+                const d  = Math.sqrt(dx * dx + dy * dy);
+                if (d < minD) { minD = d; found = p; }
+            }
         }
 
         if (found) {
@@ -62,7 +77,7 @@ export class GameEngine {
             }
 
             found.isPinned = true;
-            found.pinnedTo = { ...w };
+            this.draggedPoint.pinnedTo = { x: w.x, y: w.y };
         }
     }
 
@@ -83,8 +98,8 @@ export class GameEngine {
     }
 
     tryHook(point) {
-        // 只有頂部光點才能掛上
-        if (!point.isTopPoint) return false;
+        // 全光點中，只有「邊界光點」才能被掛上
+        if (!point.isBoundary) return false;
 
         for (const hook of this.hooks) {
             // ── 一個掛鉤同時只接受一個光點 ──
@@ -102,9 +117,11 @@ export class GameEngine {
                 point.pinnedTo = { x: hook.x, y: hook.y };
                 hook.point     = point;
 
-                // ── 只有掛上「唯一正確的目標光點」才算達成此掛鉤的勝利條件 ──
-                // 掛上其他頂部光點可以掛，但 correct 維持 false，不會過關
-                hook.correct = (point === hook.targetPoint);
+                // ── 放寬勝利條件：不要求絕對同一個點 ──
+                const du = point.uv.u - hook.targetPoint.uv.u;
+                const dv = point.uv.v - hook.targetPoint.uv.v;
+                const distUV = Math.sqrt(du * du + dv * dv);
+                hook.correct = (distUV < 0.15);
 
                 this.playCrystalSound();
 
@@ -137,6 +154,7 @@ export class GameEngine {
     async loadLevel(levelData) {
         this.isRunning = false;
         this.world = new PhysicsWorld();
+        this.world.boundaryStiffness = 0.5;
         this.hooks = [];
         this.renderer.clearHooks();
 
@@ -148,8 +166,8 @@ export class GameEngine {
 
         const imgAspect = img.naturalWidth / img.naturalHeight;
 
-        // 縮圖取樣
-        const SAMPLE_H = 80;
+        // 縮圖取樣（調高解析度至 70，取得密度與效能的完美平衡）
+        const SAMPLE_H = 70;
         const SAMPLE_W = Math.round(SAMPLE_H * imgAspect);
 
         const offscreen = document.createElement('canvas');
@@ -168,85 +186,79 @@ export class GameEngine {
         const startX   = -totalW / 2;
         const startY   =  totalH / 2;
 
-        // 建立光點網格
+        // 建立光點網格與邊界檢測
         const grid = [];
+        let ptIndex = 0;
         for (let y = 0; y < SAMPLE_H; y++) {
             grid[y] = [];
             for (let x = 0; x < SAMPLE_W; x++) {
                 const idx = (y * SAMPLE_W + x) * 4;
-                const r = data[idx], g = data[idx+1], b = data[idx+2], a = data[idx+3];
+                const a = data[idx+3];
                 if (a > 30) {
                     const wx  = startX + x * spacingX;
                     const wy  = startY - y * spacingY;
+                    const r = data[idx], g = data[idx+1], b = data[idx+2];
                     const col = (r << 16) | (g << 8) | b;
                     const p   = new PhysicsPoint(wx, wy, col);
+                    p.uv.u = x / (SAMPLE_W - 1);
+                    p.uv.v = 1.0 - (y / (SAMPLE_H - 1));
+                    p.index = ptIndex++;
                     this.world.addPoint(p);
                     grid[y][x] = p;
                 }
             }
         }
 
-        // 建立結構約束（4方向 + 對角）
-        const structDirs = [[1,0],[0,1],[1,1],[-1,1]];
+        // 邊界檢測：使用棋盤格空間座標 (x+y)%8 來均勻抽取，保證四面八方都不會漏掉
         for (let y = 0; y < SAMPLE_H; y++) {
             for (let x = 0; x < SAMPLE_W; x++) {
                 const p = grid[y][x];
                 if (!p) continue;
+                let isEdge = false;
+                if (x === 0 || x === SAMPLE_W - 1 || y === 0 || y === SAMPLE_H - 1) {
+                    isEdge = true;
+                } else {
+                    if (!grid[y-1][x] || !grid[y+1][x] || !grid[y][x-1] || !grid[y][x+1]) {
+                        isEdge = true;
+                    }
+                }
+                
+                // 只有落在交錯座標上的邊緣點才升級為大光點
+                if (isEdge && (x + y) % 8 === 0) {
+                    p.isBoundary = true;
+                } else {
+                    p.isBoundary = false;
+                }
+            }
+        }
+
+        // 建立結構約束（4方向相鄰與對角）
+        const structDirs = [[1,0], [0,1], [1,1], [-1,1]];
+        for (let y = 0; y < SAMPLE_H; y++) {
+            for (let x = 0; x < SAMPLE_W; x++) {
+                const p = grid[y][x];
+                if (!p) continue;
+                
+                // 約束
                 for (const [dx, dy] of structDirs) {
                     const nx = x + dx, ny = y + dy;
-                    if (nx < 0 || nx >= SAMPLE_W || ny < 0 || ny >= SAMPLE_H) continue;
-                    const q = grid[ny][nx];
-                    if (!q) continue;
-                    const dist = Math.sqrt((p.pos.x-q.pos.x)**2 + (p.pos.y-q.pos.y)**2);
-                    this.world.addConstraint(p, q, dist, 1.0);
-                }
-            }
-        }
-
-        // 孤立點補橋
-        const pts    = this.world.points;
-        const bridgeR = spacingX * 2.2;
-        for (let i = 0; i < pts.length; i++) {
-            const p1 = pts[i];
-            let linked = false;
-            for (let j = i + 1; j < pts.length; j++) {
-                const dx = p1.pos.x - pts[j].pos.x;
-                const dy = p1.pos.y - pts[j].pos.y;
-                if (Math.sqrt(dx*dx + dy*dy) < bridgeR) { linked = true; break; }
-            }
-            if (!linked) {
-                let minD = Infinity, nearest = null;
-                for (let j = 0; j < pts.length; j++) {
-                    if (j === i) continue;
-                    const dx = p1.pos.x - pts[j].pos.x;
-                    const dy = p1.pos.y - pts[j].pos.y;
-                    const d  = Math.sqrt(dx*dx + dy*dy);
-                    if (d < minD) { minD = d; nearest = pts[j]; }
-                }
-                if (nearest) this.world.addConstraint(p1, nearest, minD);
-            }
-        }
-
-        // ── 標記頂部光點（isTopPoint）──────────────────────────
-        // 每個 x 列最頂端往下 20% 的光點都可以被掛上
-        const topThreshPx = Math.ceil(SAMPLE_H * 0.20);
-        for (let x = 0; x < SAMPLE_W; x++) {
-            for (let y = 0; y < SAMPLE_H; y++) {
-                if (grid[y][x]) {
-                    for (let dy = 0; dy < topThreshPx && (y + dy) < SAMPLE_H; dy++) {
-                        if (grid[y + dy][x]) grid[y + dy][x].isTopPoint = true;
+                    if (nx >= 0 && nx < SAMPLE_W && ny >= 0 && ny < SAMPLE_H) {
+                        const q = grid[ny][nx];
+                        if (q) {
+                            const dist = Math.sqrt((p.pos.x-q.pos.x)**2 + (p.pos.y-q.pos.y)**2);
+                            this.world.addConstraint(p, q, dist, 1.0);
+                        }
                     }
-                    break;
                 }
             }
         }
 
-        // ── 天際線掃描，找出圖片頂部的突出峰值作為掛鉤目標 ──
+        // ── 天際線掃描，找出圖片頂部邊界的突出峰值作為掛鉤目標 ──
         const skyline = new Array(SAMPLE_W).fill(SAMPLE_H);
         let minX = SAMPLE_W, maxX = -1;
         for (let x = 0; x < SAMPLE_W; x++) {
             for (let y = 0; y < SAMPLE_H; y++) {
-                if (grid[y][x]) {
+                if (grid[y][x]) { // 直接找真實邊界，不受光點稀疏化影響
                     skyline[x] = y;
                     if (x < minX) minX = x;
                     if (x > maxX) maxX = x;
@@ -324,7 +336,7 @@ export class GameEngine {
             this.addHook(hookX, hookY, color, targetPoint);
         }
 
-        // 建立點雲
+        // 建立點雲（全光點版）
         this.renderer.createPointMesh(this.world.points);
         this.isRunning = true;
 
@@ -334,21 +346,22 @@ export class GameEngine {
 
         setTimeout(() => {
             this.isFrozen = false;
-            // ── 先關閉重力，把光點隨機傳送到全畫面 ──
-            this.world.gravity = 0;
-            const hh = Math.tan(30 * Math.PI / 180) * 6;
-            const hw = hh * (window.innerWidth / window.innerHeight);
+            // ── 陣風吹落效果（強烈的同向隨機亂流，不向內收縮） ──
             for (const p of this.world.points) {
                 if (p.isPinned) continue;
-                const rx = (Math.random() - 0.5) * hw * 1.8;
-                const ry = (Math.random() - 0.5) * hh * 1.8;
-                p.pos.x    = rx;
-                p.pos.y    = ry;
-                p.oldPos.x = rx;
-                p.oldPos.y = ry;
+                
+                // 平緩的陣風 + 微小的擾動
+                const windX = 0.5;
+                const windY = 0.5;
+                const randomStr = 0.3; // 降低亂流，避免布料打結
+                
+                const vx = windX + (Math.random()-0.5)*randomStr;
+                const vy = windY + (Math.random()-0.5)*randomStr;
+                
+                p.oldPos.x = p.pos.x - vx;
+                p.oldPos.y = p.pos.y - vy;
             }
-            // ── 1.5 秒後恢復重力，讓光點自然往下飄落 ──
-            setTimeout(() => { this.world.gravity = -0.002; }, 1500);
+            // 重力保持開啟，讓布料自然往下墜落
         }, 500);
     }
 
@@ -359,6 +372,14 @@ export class GameEngine {
 
     loop() {
         if (!this.isRunning) return;
+        requestAnimationFrame(() => this.loop());
+
+        // 緩慢恢復邊界約束的硬度
+        if (!this.draggedPoint && this.stiffnessTarget > this.world.boundaryStiffness) {
+            this.world.boundaryStiffness += 0.02; 
+            if (this.world.boundaryStiffness > 1.0) this.world.boundaryStiffness = 1.0;
+        }
+
         const time   = performance.now() * 0.001;
         const aspect = window.innerWidth / window.innerHeight;
         const halfH  = Math.tan(30 * Math.PI / 180) * 6;
@@ -367,17 +388,28 @@ export class GameEngine {
         if (!this.isFrozen) {
             this.world.step();
 
-            // 世界邊界
+            // 世界邊界：上左右働列片
+            // 底部改為「桃面平台」效果：跣到底部的點會向兩側滞開而不是堆疊
+            const floorY = -halfH * 0.70; // 底部平台在畫面底部 30% 處
             for (const p of this.world.points) {
                 if (p.isPinned) continue;
-                if (p.pos.x < -halfW) { p.pos.x = -halfW; p.oldPos.x = p.pos.x; }
-                if (p.pos.x >  halfW) { p.pos.x =  halfW; p.oldPos.x = p.pos.x; }
-                if (p.pos.y < -halfH) { p.pos.y = -halfH; p.oldPos.y = p.pos.y; }
+                // 左右倘
+                if (p.pos.x < -halfW) { p.pos.x = -halfW; p.oldPos.x = p.pos.x + 0.01; }
+                if (p.pos.x >  halfW) { p.pos.x =  halfW; p.oldPos.x = p.pos.x - 0.01; }
+                // 上方倘
                 if (p.pos.y >  halfH) { p.pos.y =  halfH; p.oldPos.y = p.pos.y; }
+                // 底部「桃面平台」：落地時施加滯動應力，讓點向兩側散開
+                if (p.pos.y < floorY) {
+                    p.pos.y = floorY;
+                    // 將垂直速度歸零，但保留一個微小的滯動力讓點正顯散開
+                    const vx = p.pos.x - p.oldPos.x;
+                    const scatter = (Math.random() - 0.5) * 0.04; // 滯動方向隨機
+                    p.oldPos.x = p.pos.x - (vx * 0.85 + scatter); // 保留橫向施加滯動
+                    p.oldPos.y = p.pos.y + 0.01; // 將垂直速度鞅为零
+                }
             }
         }
 
         this.renderer.update(this.world.points, time);
-        requestAnimationFrame(() => this.loop());
     }
 }

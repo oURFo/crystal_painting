@@ -210,7 +210,6 @@ body::before {
     width: 80%;
     height: 100px;
     object-fit: contain;
-    filter: invert(1); /* 將黑線轉為白線 */
 }
 
 /* Mobile responsive for level card */

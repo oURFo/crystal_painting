@@ -6,11 +6,14 @@
 export class PhysicsPoint {
     constructor(x, y, color = 0xffffff) {
         this.pos    = { x, y };
-        this.oldPos = { x, y }; // 初始 oldPos 等於 pos，代表靜止
+        this.oldPos = { x, y };
         this.color  = color;
         this.isPinned  = false;
         this.pinnedTo  = null;
-        this.friction  = 0.985; // 輕微空氣阻力
+        this.friction  = 0.985;
+        this.uv        = { u: 0, v: 0 };
+        this.isBoundary = false;
+        this.index     = -1;
     }
 
     update(gravity) {
@@ -24,20 +27,17 @@ export class PhysicsPoint {
             return;
         }
 
-        // Verlet 積分
         const vx = (this.pos.x - this.oldPos.x) * this.friction;
         const vy = (this.pos.y - this.oldPos.y) * this.friction;
-
-        // 速度上限，防止飛走
-        const maxV = 0.4; // 提高速度上限，讓隨機分布更自然
-        const speed = Math.sqrt(vx * vx + vy * vy);
-        const scale = speed > maxV ? maxV / speed : 1;
 
         this.oldPos.x = this.pos.x;
         this.oldPos.y = this.pos.y;
 
-        this.pos.x += vx * scale;
-        this.pos.y += vy * scale + gravity;
+        // 邊界大光點稍重 (1.5x)，幫助布料向外垂落
+        const pointGravity = this.isBoundary ? gravity * 1.5 : gravity;
+
+        this.pos.x += vx;
+        this.pos.y += vy + pointGravity;
     }
 }
 
@@ -46,15 +46,14 @@ export class PhysicsConstraint {
         this.p1 = p1;
         this.p2 = p2;
         this.restLength = restLength;
-        this.stiffness  = stiffness; // 1.0 = 完全剛性，0.x = 彈性
+        this.stiffness  = stiffness;
     }
 
     solve() {
         let dx   = this.p2.pos.x - this.p1.pos.x;
         let dy   = this.p2.pos.y - this.p1.pos.y;
         let dist = Math.sqrt(dx * dx + dy * dy);
-        
-        // 避免完全重疊導致永久沾黏（當 dist 為 0 時給予微小擾動）
+
         if (dist === 0) {
             dx = (Math.random() - 0.5) * 0.01;
             dy = (Math.random() - 0.5) * 0.01;
@@ -79,7 +78,7 @@ export class PhysicsWorld {
     constructor() {
         this.points      = [];
         this.constraints = [];
-        this.gravity     = -0.002; // 預設重力，可由 engine 動態調整
+        this.gravity     = -0.01;
     }
 
     addPoint(p) {
@@ -92,13 +91,13 @@ export class PhysicsWorld {
     }
 
     step() {
-        // 1. 更新位置 (Verlet)
+        // 1. Verlet 積分
         for (const p of this.points) p.update(this.gravity);
 
-        // 2. 解除約束 (15次迭代 = 保留適度彈性，允許甩開)
+        // 2. 解除約束 (15 次迭代)
         for (let i = 0; i < 15; i++) {
             for (const c of this.constraints) c.solve();
-            // 強制固定釘住的點
+            // 固定被釘住的點
             for (const p of this.points) {
                 if (p.isPinned && p.pinnedTo) {
                     p.pos.x = p.pinnedTo.x;

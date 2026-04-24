@@ -5,12 +5,8 @@
 
 import { GameEngine } from './engine.js';
 
-// --- 關卡數據 ---
-const LEVELS = [
-    { id: 1, title: '船長皮卡丘', image: 'assets/level1.png', points: 150 },
-    { id: 2, title: '第二關', image: 'assets/level2.png', points: 150 },
-    { id: 3, title: '第三關', image: 'assets/level3.png', points: 150 },
-];
+// 關卡將從 assets/ 目錄動態載入
+const LEVELS = [];
 
 class App {
     constructor() {
@@ -30,7 +26,7 @@ class App {
 
     init() {
         this.bindEvents();
-        this.renderLevels();
+        this.loadDynamicLevels();
     }
 
     bindEvents() {
@@ -70,14 +66,43 @@ class App {
         this.currentScreen = screenName;
     }
 
+    async loadDynamicLevels() {
+        this.levelSlider.innerHTML = '<div class="loading">正在載入關卡...</div>';
+        LEVELS.length = 0; // 清空
+        let i = 1;
+        while (true) {
+            const imgPath = `assets/level${i}.png`;
+            try {
+                const response = await fetch(imgPath, { method: 'HEAD', cache: 'no-cache' });
+                if (!response.ok) break; // 遭遇 404 或其他錯誤，停止偵測
+                LEVELS.push({
+                    id: i,
+                    title: `第 ${i} 關`,
+                    image: imgPath
+                });
+                i++;
+            } catch (error) {
+                break; // 網路錯誤，停止偵測
+            }
+        }
+        
+        if (LEVELS.length === 0) {
+            this.levelSlider.innerHTML = '<div class="error">找不到任何關卡圖片 (assets/level1.png)</div>';
+        } else {
+            this.renderLevels();
+        }
+    }
+
     renderLevels() {
         this.levelSlider.innerHTML = '';
         LEVELS.forEach(level => {
             const card = document.createElement('div');
             card.className = `level-card ${level.locked ? 'locked' : ''}`;
+            // 加上時間戳破快取，確保更換圖片後縮圖也會更新
+            const timestamp = Date.now();
             card.innerHTML = `
                 <span class="level-num">${level.id.toString().padStart(2, '0')}</span>
-                ${level.image ? `<img src="${level.image}" class="level-thumb" alt="${level.title}">` : '<div class="locked-icon">🔒</div>'}
+                ${level.image ? `<img src="${level.image}?v=${timestamp}" class="level-thumb" alt="${level.title}">` : '<div class="locked-icon">🔒</div>'}
                 <h4 class="level-title">${level.title}</h4>
             `;
             
